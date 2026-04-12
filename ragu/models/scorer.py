@@ -39,25 +39,36 @@ class Scorer(ABC):
         self,
         texts: list[tuple[str, list[str]]],
         desc: str | None = None,
+        return_exceptions: bool = False,
         **kwargs: Any,
-    ) -> list[list[tuple[int, float]]]:
+    ) -> list[list[tuple[int, float]] | Exception]:
         """
         Runs multiple `score` calls concurrently.
 
         :param texts: List of ``(text_1, text_2_list)`` pairs.
         :param desc: Optional tqdm progress description.
+        :param return_exceptions: Boolean indicating whether to return exceptions or not.
         :param kwargs: Extra kwargs 
         :returns: One scored result list per input item.
         """
         logger.debug(f'Calling batch_score with size {len(texts)}')
-        return await tqdm_asyncio.gather(*[ # type: ignore
-            self.score(
+
+        async def _one(text_1: str, text_2: list[str]) -> list[tuple[int, float]] | Exception:
+            try:
+                return await self.score(
                 text_1=text_1,
                 text_2=text_2,
                 **kwargs,
             )
-            for text_1, text_2 in texts
-        ], desc=desc)
+            except Exception as e:
+                if return_exceptions:
+                    logger.warning(f"[SCORE]: Exception during scoring: {e}")
+                    return e
+                raise
+
+        tasks = [_one(text_1=text_1, text_2=text_2) for text_1, text_2 in texts]
+
+        return await tqdm_asyncio.gather(*tasks, desc=desc)
 
 
 class ScorerOpenAI(Scorer):

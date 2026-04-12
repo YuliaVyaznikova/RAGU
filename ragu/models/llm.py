@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Any, Sequence, TypeVar
+from typing import Any, Literal, overload, TypeVar
 from tqdm.asyncio import tqdm_asyncio
 from typing_extensions import override
 
@@ -34,32 +34,62 @@ class LLM(ABC):
         :returns: Response value as plain text or validated schema instance.
         """
 
+    @overload
     async def batch_chat_completion(
         self,
         conversations: list[list[ChatCompletionMessageParam]],
         output_schema: type[T] = str,
         desc: str | None = None,
+        return_exceptions: Literal[False] = False,
         **kwargs: Any,
-    ) -> Sequence[T]:
+    ) -> list[T]: ...
+
+    @overload
+    async def batch_chat_completion(
+        self,
+        conversations: list[list[ChatCompletionMessageParam]],
+        output_schema: type[T] = str,
+        desc: str | None = None,
+        return_exceptions: Literal[True] = True,
+        **kwargs: Any,
+    ) -> list[T | Exception]: ...
+
+    async def batch_chat_completion(
+        self,
+        conversations: list[list[ChatCompletionMessageParam]],
+        output_schema: type[T] = str,
+        desc: str | None = None,
+        return_exceptions: bool = False,
+        **kwargs: Any,
+    ) -> list[T] | list[T | Exception]:
         """
         Runs multiple :meth:`chat_completion` calls concurrently.
 
         :param conversations: List of conversation message lists.
         :param output_schema: Output schema applied to each call.
         :param desc: Optional tqdm progress description.
+        :param return_exceptions: Boolean indicating whether to return exceptions or not.
         :param kwargs: Extra kwargs forwarded to each call.
         :returns: Responses in the same order as input conversations.
         """
         logger.debug(f'Calling batch_chat_completion with size {len(conversations)}')
-        return await tqdm_asyncio.gather(*[ # type: ignore
-            self.chat_completion(
-                conversation=conversation,
-                output_schema=output_schema,
-                **kwargs,
-            )
-            for conversation in conversations
-        ], desc=desc)
-        
+
+        async def _one(conversation: list[ChatCompletionMessageParam]) -> T | Exception:
+            try:
+                return await self.chat_completion(
+                    conversation=conversation,
+                    output_schema=output_schema,
+                    **kwargs,
+                )
+            except Exception as e:
+                if return_exceptions:
+                    logger.warning(f"[LLM]: Exception during generation: {e}")
+                    return e
+                raise
+
+        tasks = [_one(conversation) for conversation in conversations]
+
+        return await tqdm_asyncio.gather(*tasks, desc=desc)
 
 
 class LLMOpenAI(LLM):

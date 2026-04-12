@@ -40,24 +40,35 @@ class Embedder(ABC):
         self,
         texts: list[str],
         desc: str | None = None,
+        return_exceptions: bool = False,
         **kwargs: Any,
-    ) -> list[list[float]] | FLOATS:
+    ) -> list[list[float] | Exception]:
         """
         Runs multiple :meth:`embed_text` calls concurrently.
 
         :param texts: List of input texts.
         :param desc: Optional tqdm progress description.
+        :param return_exceptions: Boolean indicating whether to return exceptions or not.
         :param kwargs: Extra kwargs forwarded to each call.
         :returns: Embeddings in the same order as input texts.
         """
         logger.debug(f'Calling batch_embed_text with size {len(texts)}')
-        return await tqdm_asyncio.gather(*[ # type: ignore
-            self.embed_text(
-                text=text,
-                **kwargs,
-            )
-            for text in texts
-        ], desc=desc)
+
+        async def _one(text: str) -> list[float] | FLOATS | Exception:
+            try:
+                return await self.embed_text(
+                    text=text,
+                    **kwargs,
+                )
+            except Exception as e:
+                if return_exceptions:
+                    logger.warning(f"[EMBEDDER]: Exception during embedding: {e}")
+                    return e
+                raise
+
+        tasks = [_one(text) for text in texts]
+
+        return await tqdm_asyncio.gather(*tasks, desc=desc)
 
 
 class EmbedderOpenAI(Embedder):
